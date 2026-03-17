@@ -1,0 +1,86 @@
+name: Label PR
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create and apply labels
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const labelsToEnsure = [
+              { name: 'security', color: 'e11d48', description: 'Security vulnerability or hardening' },
+              { name: 'bug',           color: 'd73a4a', description: "Something isn't working" },
+              { name: 'documentation', color: '0075ca', description: 'Improvements or additions to documentation' },
+            ];
+
+            // Create labels that don't yet exist
+            for (const label of labelsToEnsure) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ...label,
+                });
+                console.log(`Created label: ${label.name}`);
+              } catch (err) {
+                if (err.status === 422) {
+                  console.log(`Label already exists: ${label.name}`);
+                } else {
+                  throw err;
+                }
+              }
+            }
+
+            // Determine which labels apply based on changed files
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+
+            const filenames = files.map(f => f.filename);
+            console.log('Changed files:', filenames);
+
+            const apply = new Set();
+
+            for (const f of filenames) {
+              if (f.endsWith('.sol')) {
+                apply.add('bug');        // contract bug-fixes
+                apply.add('security');   // any Solidity change is security-relevant in this repo
+              }
+              if (f.match(/\.(md|txt|rst)$/i) || f.includes('AUDIT')) {
+                apply.add('documentation');
+              }
+              if (f.match(/AUDIT|audit/)) {
+                apply.add('security');
+                apply.add('documentation');
+              }
+              if (f.startsWith('.github/workflows/')) {
+                apply.add('enhancement');
+              }
+            }
+
+            if (apply.size === 0) {
+              console.log('No labels to apply.');
+              return;
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              labels: [...apply],
+            });
+
+            console.log('Applied labels:', [...apply].join(', '));

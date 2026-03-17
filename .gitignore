@@ -119,3 +119,6 @@ artifacts/
 local.json
 # Private keys
 keys.json
+
+# Audit preview images (generated locally for verification only)
+audit/preview-*.png
