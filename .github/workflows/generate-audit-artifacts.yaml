@@ -1,0 +1,119 @@
+name: Generate Audit Artifacts
+
+on:
+  push:
+    branches:
+      - 'copilot/run-full-0xcon-audit'
+      - 'main'
+    paths:
+      - 'AUDIT.md'
+      - 'scripts/generate_audit_pdf.py'
+      - 'contracts/**/*.sol'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    name: Build PDF & ZIP deliverables
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PDF dependencies
+        run: pip install fpdf2
+
+      - name: Generate audit PDF
+        run: python3 scripts/generate_audit_pdf.py
+
+      - name: Package audit deliverables ZIP
+        run: |
+          python3 - <<'PYEOF'
+          import zipfile, os, datetime
+
+          audit_dir = 'audit'
+          os.makedirs(audit_dir, exist_ok=True)
+          zip_path = os.path.join(audit_dir, 'audit-deliverables.zip')
+
+          files_to_include = [
+              ('AUDIT.md',                                  'audit-deliverables/AUDIT.md'),
+              ('audit/axelar-cgp-audit-report.pdf',         'audit-deliverables/axelar-cgp-audit-report.pdf'),
+              ('scripts/generate_audit_pdf.py',             'audit-deliverables/scripts/generate_audit_pdf.py'),
+              ('slither.config.json',                       'audit-deliverables/config/slither.config.json'),
+              ('.solhint.json',                             'audit-deliverables/config/solhint.json'),
+              ('contracts/AxelarGateway.sol',               'audit-deliverables/contracts/AxelarGateway.sol'),
+              ('contracts/auth/AxelarAuthWeighted.sol',     'audit-deliverables/contracts/auth/AxelarAuthWeighted.sol'),
+              ('contracts/ERC20Permit.sol',                 'audit-deliverables/contracts/ERC20Permit.sol'),
+              ('contracts/deposit-service/ReceiverImplementation.sol',
+                                                            'audit-deliverables/contracts/deposit-service/ReceiverImplementation.sol'),
+              ('contracts/gas-service/AxelarGasService.sol','audit-deliverables/contracts/gas-service/AxelarGasService.sol'),
+              ('contracts/DepositHandler.sol',              'audit-deliverables/contracts/DepositHandler.sol'),
+              ('contracts/deposit-service/DepositReceiver.sol',
+                                                            'audit-deliverables/contracts/deposit-service/DepositReceiver.sol'),
+          ]
+
+          now = datetime.datetime.now(datetime.UTC).isoformat()
+          manifest_lines = [
+              'Axelar CGP Solidity -- Security Audit Deliverables',
+              f'Generated: {now}',
+              'Repo: Kushmanmb/axelar-cgp-silly-files',
+              '',
+              'Contents:',
+          ]
+
+          with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+              for src, arc in files_to_include:
+                  if os.path.isfile(src):
+                      zf.write(src, arc)
+                      manifest_lines.append(f'  {arc}')
+                  else:
+                      print(f'WARNING: {src} not found, skipping')
+              manifest_lines.append('')
+              manifest_lines.append('Findings: 0 Critical | 3 High | 4 Medium | 5 Low | 4 Informational')
+              zf.writestr('audit-deliverables/MANIFEST.txt', '\n'.join(manifest_lines))
+
+          size_kb = os.path.getsize(zip_path) // 1024
+          print(f'Created: {zip_path}  ({size_kb} KB)')
+          PYEOF
+
+      - name: List artifacts
+        run: |
+          echo "=== audit/ contents ==="
+          ls -lh audit/
+
+      - name: Upload PDF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: axelar-cgp-audit-report-pdf
+          path: audit/axelar-cgp-audit-report.pdf
+          retention-days: 90
+
+      - name: Upload ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-deliverables-zip
+          path: audit/audit-deliverables.zip
+          retention-days: 90
+
+      - name: Commit generated artifacts
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add audit/axelar-cgp-audit-report.pdf audit/audit-deliverables.zip
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "ci: regenerate audit PDF and ZIP [skip ci]"
+            git push
+          fi
